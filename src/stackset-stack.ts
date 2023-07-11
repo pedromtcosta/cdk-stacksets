@@ -28,12 +28,16 @@ export const fileAssetResourceName = 'StackSetAssetsBucketDeployment';
  * Interoperates with the StackSynthesizer of the parent stack.
  */
 export class StackSetStackSynthesizer extends StackSynthesizer {
+  private replicationDeploymentCount = 0;
   private readonly assetBucket?: IBucket;
+  private readonly replicationBuckets: IBucket[];
   private bucketDeployment?: BucketDeployment;
+  private replicationDeployments = new Map<string, BucketDeployment>();
 
-  constructor(assetBucket?: IBucket) {
+  constructor(assetBucket?: IBucket, replicationBuckets?: IBucket[]) {
     super();
     this.assetBucket = assetBucket;
+    this.replicationBuckets = replicationBuckets ?? [];
   }
 
   public addFileAsset(asset: FileAssetSource): FileAssetLocation {
@@ -71,6 +75,28 @@ export class StackSetStackSynthesizer extends StackSynthesizer {
 
     } else {
       this.bucketDeployment.addSource(Source.asset(assetPath));
+    }
+
+    for (const replicationBucket of this.replicationBuckets) {
+      const replicationDeployment = this.replicationDeployments.get(replicationBucket.bucketName);
+      if (!replicationDeployment) {
+        const parentStack = (this.boundStack as StackSetStack)._getParentStack();
+
+        const bucketDeployment = new BucketDeployment(
+          parentStack,
+          `${fileAssetResourceName}-${this.replicationDeploymentCount++}`,
+          {
+            sources: [Source.asset(assetPath)],
+            destinationBucket: replicationBucket,
+            extract: false,
+            prune: false,
+          },
+        );
+
+        this.replicationDeployments.set(replicationBucket.bucketName, bucketDeployment);
+      } else {
+        replicationDeployment.addSource(Source.asset(assetPath));
+      }
     }
 
     const physicalName = this.physicalNameOfBucket(this.assetBucket);
@@ -118,6 +144,7 @@ export interface StackSetStackProps {
    * @default No Bucket provided and Assets will not be supported.
    */
   readonly assetBucket?: IBucket;
+  readonly replicationBuckets?: IBucket[];
 
 }
 
@@ -136,7 +163,7 @@ export class StackSetStack extends Stack {
   private _parentStack: Stack;
   constructor(scope: Construct, id: string, props: StackSetStackProps = {}) {
     super(scope, id, {
-      synthesizer: new StackSetStackSynthesizer(props.assetBucket),
+      synthesizer: new StackSetStackSynthesizer(props.assetBucket, props.replicationBuckets),
     });
 
     this._parentStack = findParentStack(scope);
